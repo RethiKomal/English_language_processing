@@ -1,0 +1,92 @@
+you are an expert data scientist. I have made a model whose loss is 3. Make the necessary changes and optimizations to the fullest to make the loss below 1. Use optimizers as Adagrad, change learning rate, learning rate scheduler, early stopping callback, batch size, epochs, lemitization for text preprocessing. The current code is given below - 
+
+import pandas as pd
+import numpy as np
+import torch
+
+from torch.utils.data import Dataset
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, accuracy_score
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, GPT2Config, TextDataset, DataCollatorForLanguageModeling, Trainer, TrainingArguments
+
+data=pd.read_csv('/content/drive/MyDrive/Colab_Notebooks/ELP/train.csv', error_bad_lines=False)
+data.head()
+
+# Preprocess the data
+tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+data['input_ids'] = data['full_text'].apply(lambda x: tokenizer.encode(x, truncation=True, max_length=512))
+
+# Fine-tune GPT-2 on your dataset
+config = GPT2Config.from_pretrained('gpt2')
+config.num_labels = 6
+model = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
+
+# Add a padding token to the tokenizer
+if tokenizer.pad_token is None:
+    tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+
+# Update the model's embeddings to include the new padding token
+model.resize_token_embeddings(len(tokenizer))
+
+class CustomDataset(Dataset):
+    def __init__(self, tokenizer, data, block_size):
+        self.tokenizer = tokenizer
+        self.data = data
+        self.block_size = block_size
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        input_ids = self.data.iloc[idx]['input_ids']
+        labels = self.data.iloc[idx][['cohesion', 'syntax', 'vocabulary', 'phraseology', 'grammar', 'conventions']].values
+
+        # Pad input_ids
+        input_ids = input_ids + [tokenizer.pad_token_id] * (self.block_size - len(input_ids))
+
+        # Convert input_ids and labels to tensors
+        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        labels = torch.tensor(pd.to_numeric(labels.flatten(), errors='coerce'), dtype=torch.float64)
+
+        return {'input_ids': input_ids, 'labels': labels}
+
+train_data, val_data = train_test_split(data, test_size=0.2)
+train_dataset = CustomDataset(tokenizer=tokenizer, data=train_data, block_size=512)
+val_dataset = CustomDataset(tokenizer=tokenizer, data=val_data, block_size=512)
+
+data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+training_args = TrainingArguments(
+    output_dir='./results',
+    overwrite_output_dir=True,
+    num_train_epochs=3,
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=4,
+    eval_steps=100,
+    save_steps=100,
+    logging_steps=10,
+    evaluation_strategy='steps',
+    save_total_limit=1,
+    gradient_accumulation_steps=4,
+    fp16=True,
+    load_best_model_at_end=True,
+)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    data_collator=data_collator,
+    train_dataset=train_dataset,
+    eval_dataset=val_dataset,
+)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    data_collator=data_collator,
+    train_dataset=train_dataset,
+    eval_dataset=val_dataset,
+)
+
+trainer.train()
+
+trainer.evaluate(val_dataset)
